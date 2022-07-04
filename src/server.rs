@@ -2,7 +2,6 @@ use openssl::ssl::{SslMethod, SslAcceptor, SslStream, SslFiletype};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::io::{Read, Write};
-use url::Url;
 use crate::config::GeminiConfig;
 use crate::utils::*;
 use percent_encoding::percent_decode_str;
@@ -33,8 +32,9 @@ impl Server {
     }
     pub fn run_server(&mut self) {
         loop {
-            let stream = self.listener.accept().map(|s| s.0);
-            if let Ok(stream) = stream {
+            let stream = self.listener.accept();
+            if let Ok((stream, socket)) = stream {
+                println!("connection from {}", socket);
                 let acceptor = self.acceptor.clone();
                 let accepted_stream = acceptor.accept(stream);
                 if let Ok(stream) = accepted_stream {
@@ -62,13 +62,14 @@ impl Server {
     }
 
     pub fn process_request(&self, request: &str) -> Result<(String, Vec<u8>), GeminiError> {
-        log(&format!("got request {:?}", request.trim()));
+        println!("got request {:?}", request.trim());
         let path = self.process_url(request)?;
-        let path = self.normalise_path(path);
-        println!("\tnormalised to: {:?}", path);
         if let Some((redir, perm)) = self.config.check_redirect(&path) {
+            println!("\tredirecting to {:?}", redir);
             return Err(GeminiError::redirect(&redir, perm))
         }
+        let path = self.pre_postfix_path(path);
+        println!("\tnormalised to: {:?}", path);
         if !path.exists() {
             return Err(GeminiError::not_found())
         }
@@ -78,38 +79,27 @@ impl Server {
     }
     // checks the url for validity and safety etc, then returns the path
     fn process_url(&self, u: &str) -> Result<String, GeminiError> {
-        let url: Url = u.parse().map_err(|_| GeminiError::bad_request(""))?;
-        let protocol = url.scheme();
-        if protocol != "gemini" {
-            return Err(GeminiError::bad_request(""))
-        }
+        let url: Uri = Uri::new(u)?;
 
-        let hostname = url.host_str().ok_or(GeminiError::bad_request(""))?;
         let server_hostname = self.config.hostname();
-        if hostname != server_hostname {
+        if url.hostname != server_hostname {
             return Err(GeminiError::bad_request(""))
         }
 
-        let path = percent_decode_str(url.path()).decode_utf8().map_err(|_| GeminiError::bad_request(""))?.to_string();
-        if does_path_backtrack(&path) {
-            return Err(GeminiError::bad_request(""))
-        }
+        let path = percent_decode_str(url.path).decode_utf8().map_err(|_| GeminiError::bad_request(""))?.to_string();
         println!("\trequest path: {:?}", path);
         Ok(path)
     }
 
-    fn normalise_path(&self, p: impl AsRef<Path>) -> PathBuf {
+    fn pre_postfix_path(&self, p: impl AsRef<Path>) -> PathBuf {
         let content_root = self.config.content_folder();
-        let mut path = if p.as_ref().has_root() {
-            content_root.join(p.as_ref().strip_prefix("/").unwrap())
-        }
-        else {
-            content_root
-        };
+        let path = content_root.join(normalise_path(p));
         if path.is_dir() {
             let default_file = self.config.index();
-            path = path.join(default_file);
+            path.join(default_file)
         }
-        path
+        else {
+            path
+        }
     }
 }

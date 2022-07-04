@@ -17,8 +17,8 @@ impl GeminiConfig {
     pub fn new(path: impl AsRef<Path>) -> GeminiConfig {
         let ini = read_to_string(path).unwrap();
         let document = IniDocument::from_string(ini).unwrap();
-        let port = document.get(PORT, "").map(|p| p.parse::<u16>().unwrap()).unwrap_or(1965);
-        let redirects_ttl = document.get(REDIRECTS_TTL, "").map(|p| p.parse::<u64>().unwrap()).unwrap_or(1800);
+        let port = document.get(PORT, "").map(|p| p.parse::<u16>().unwrap()).unwrap_or(DEFAULT_PORT);
+        let redirects_ttl = document.get(REDIRECTS_TTL, "").map(|p| p.parse::<u64>().unwrap()).unwrap_or(DEFAULT_REDIRECTS_TTL);
         let redirects_last_update = RefCell::new(Instant::now());
         let redirects_table = RefCell::new(IniDocument::empty());
 
@@ -32,10 +32,14 @@ impl GeminiConfig {
         cfg
     }
     fn update_redirects(&self, path: &str) {
+        eprintln!("updating redirects table");
         match read_to_string(path) {
             Ok(ini) => {
                 match IniDocument::from_string(ini) {
-                    Ok(document) => { self.redirects_table.replace(document); }
+                    Ok(document) => {
+                        self.redirects_table.replace(document);
+                        eprintln!("updated successfully");
+                    }
                     Err(e) => eprintln!("error loading redirects table: {}", e)
                 }
             }
@@ -47,19 +51,19 @@ impl GeminiConfig {
         self.port
     }
     pub fn content_folder(&self) -> PathBuf {
-        PathBuf::from(self.ini.get(CONTENT_FOLDER, "").unwrap_or("content"))
+        PathBuf::from(self.ini.get(CONTENT_FOLDER, "").unwrap_or(DEFAULT_CONTENT_FOLDER))
     }
     pub fn certificate_file(&self) -> &str {
-        self.ini.get(CERT_CHAIN_FILE, "").unwrap_or("cert.pem")
+        self.ini.get(CERT_CHAIN_FILE, "").unwrap_or(DEFAULT_CERT)
     }
     pub fn private_key_file(&self) -> &str {
-        self.ini.get(PRIVATE_KEY_FILE, "").unwrap_or("key.pem")
+        self.ini.get(PRIVATE_KEY_FILE, "").unwrap_or(DEFAULT_KEY)
     }
     pub fn hostname(&self) -> &str {
-        self.ini.get(HOSTNAME, "").unwrap_or("localhost")
+        self.ini.get(HOSTNAME, "").unwrap_or(DEFAULT_HOSTNAME)
     }
     pub fn index(&self) -> PathBuf {
-        PathBuf::from(self.ini.get(INDEX, "").unwrap_or("index.gmi"))
+        PathBuf::from(self.ini.get(INDEX, "").unwrap_or(DEFAULT_INDEX))
     }
     pub fn check_redirect(&self, path: impl AsRef<Path>) -> Option<(String, bool)> {
         let redir_file_path = if let Some(p) = self.ini.get(REDIRECTS_FILE, "") {
@@ -94,3 +98,11 @@ const REDIRECTS_FILE: &str = "redirects_file";
 const REDIRECTS_TTL: &str = "redirects_ttl";
 const REDIRECT_DESTINATION: &str = "destination";
 const REDIRECT_IS_PERMANENT: &str = "permanent";
+
+const DEFAULT_REDIRECTS_TTL: u64 = 30 * 60; // 30 minutes
+const DEFAULT_PORT: u16 = 1965;
+const DEFAULT_INDEX: &str = "index.gmi";
+const DEFAULT_CONTENT_FOLDER: &str = "content";
+const DEFAULT_CERT: &str = "cert.pem";
+const DEFAULT_KEY: &str = "key.pem";
+const DEFAULT_HOSTNAME: &str = "localhost";
