@@ -149,6 +149,7 @@ mod tests {
         assert_eq!(normalise_path("/../b/c"), PathBuf::from("b/c"));
         assert_eq!(normalise_path("/a/b/c/../d"), PathBuf::from("a/b/d"));
         assert_eq!(normalise_path("/../foo/bar/../../a"), PathBuf::from("a"));
+        assert_eq!(normalise_path("a/b/c/"), PathBuf::from("a/b/c"));
     }
 
     #[test]

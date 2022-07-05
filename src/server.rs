@@ -94,6 +94,7 @@ impl Worker {
         self.log(&format!("got request {:?}", request.trim()));
         //sleep(Duration::from_secs(5));
         let path = self.process_url(&request)?;
+        let path = normalise_path(path);
         let conf_lock = self.config.lock().map_err(|_| GeminiError::temporary_failure("internal server error"))?;
         if let Some((redir, perm)) = conf_lock.check_redirect(&path) {
             self.log(&format!("\tredirecting to {:?}", redir));
@@ -127,7 +128,7 @@ impl Worker {
     fn pre_postfix_path(&self, p: impl AsRef<Path>) -> Result<PathBuf, GeminiError> {
         let conf_lock = self.config.lock().map_err(|_| GeminiError::temporary_failure("internal server error"))?;
         let content_root = conf_lock.content_folder();
-        let path = content_root.join(normalise_path(p));
+        let path = content_root.join(p.as_ref());
         Ok(if path.is_dir() {
             let default_file = conf_lock.index();
             path.join(default_file)
