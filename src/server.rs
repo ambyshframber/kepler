@@ -1,6 +1,6 @@
 use openssl::ssl::{SslMethod, SslAcceptor, SslStream, SslFiletype};
 use std::net::{TcpListener, TcpStream};
-use std::sync::Arc;
+use std::sync::{Mutex, Arc};
 use std::io::{Read, Write};
 use crate::config::GeminiConfig;
 use crate::utils::*;
@@ -8,12 +8,18 @@ use percent_encoding::percent_decode_str;
 use std::path::{Path, PathBuf};
 use mime_guess::from_path;
 use std::fs::read;
+use threadpool::ThreadPool;
+//use std::thread::sleep;
+//use std::time::Duration;
 
 pub struct Server {
     listener: TcpListener,
     acceptor: Arc<SslAcceptor>,
 
-    config: GeminiConfig,
+    config: Arc<Mutex<GeminiConfig>>,
+
+    threads: ThreadPool,
+    cur_job: u8
 }
 
 impl Server {
@@ -25,9 +31,11 @@ impl Server {
         let acceptor = Arc::new(acceptor.build());
 
         let listener = TcpListener::bind(("0.0.0.0", config.port())).unwrap();
+        let threads = ThreadPool::new(4);
+        let config = Arc::new(Mutex::new(config));
 
         Server {
-            listener, acceptor, config
+            listener, acceptor, config, threads, cur_job: 0
         }
     }
     pub fn run_server(&mut self) {
@@ -38,7 +46,8 @@ impl Server {
                 let acceptor = self.acceptor.clone();
                 let accepted_stream = acceptor.accept(stream);
                 if let Ok(stream) = accepted_stream {
-                    self.handle_connection(stream)
+                    self.handle_connection(stream);
+                    self.cur_job = self.cur_job.wrapping_add(1);
                 }
             }
         }
@@ -49,27 +58,50 @@ impl Server {
         let _ = stream.read(&mut buf);
         let request = String::from_utf8_lossy(&buf).trim_matches('\0').to_string();
 
-        let response = self.process_request(&request);
-        let _ = match response {
-            Ok((mime, data)) => {
-                let header = format!("20 {}\r\n", mime);
-                let _ = stream.write(header.as_bytes());
-                stream.write(&data)
-            }
-            Err(e) => stream.write(e.to_string().as_bytes())
-        };
-        let _ = stream.flush();
+        let id = self.cur_job;
+        let c_config = Arc::clone(&self.config);
+        self.threads.execute(move || {
+            let worker = Worker::new(c_config, id);
+            let response = worker.process_request(request);
+            let _ = match response {
+                Ok((mime, data)) => {
+                    let header = format!("20 {}\r\n", mime);
+                    let _ = stream.write(header.as_bytes());
+                    stream.write(&data)
+                }
+                Err(e) => stream.write(e.to_string().as_bytes())
+            };
+            let _ = stream.flush();
+        });
+    }
+}
+
+struct Worker {
+    config: Arc<Mutex<GeminiConfig>>,
+    id: u8
+}
+impl Worker {
+    pub fn new(config: Arc<Mutex<GeminiConfig>>, id: u8) -> Worker {
+        Worker {
+            config, id
+        }
+    }
+    pub fn log(&self, msg: &str) {
+        println!("[{:02x}] {}", self.id, msg)
     }
 
-    pub fn process_request(&self, request: &str) -> Result<(String, Vec<u8>), GeminiError> {
-        println!("got request {:?}", request.trim());
-        let path = self.process_url(request)?;
-        if let Some((redir, perm)) = self.config.check_redirect(&path) {
-            println!("\tredirecting to {:?}", redir);
+    pub fn process_request(&self, request: String) -> Result<(String, Vec<u8>), GeminiError> {
+        self.log(&format!("got request {:?}", request.trim()));
+        //sleep(Duration::from_secs(5));
+        let path = self.process_url(&request)?;
+        let conf_lock = self.config.lock().map_err(|_| GeminiError::temporary_failure("internal server error"))?;
+        if let Some((redir, perm)) = conf_lock.check_redirect(&path) {
+            self.log(&format!("\tredirecting to {:?}", redir));
             return Err(GeminiError::redirect(&redir, perm))
         }
-        let path = self.pre_postfix_path(path);
-        println!("\tnormalised to: {:?}", path);
+        drop(conf_lock);
+        let path = self.pre_postfix_path(path)?;
+        self.log(&format!("\tnormalised to: {:?}", path));
         if !path.exists() {
             return Err(GeminiError::not_found())
         }
@@ -81,25 +113,27 @@ impl Server {
     fn process_url(&self, u: &str) -> Result<String, GeminiError> {
         let url: Uri = Uri::new(u)?;
 
-        let server_hostname = self.config.hostname();
+        let conf_lock = self.config.lock().map_err(|_| GeminiError::temporary_failure("internal server error"))?;
+        let server_hostname = conf_lock.hostname();
         if url.hostname != server_hostname {
             return Err(GeminiError::bad_request(""))
         }
 
         let path = percent_decode_str(url.path).decode_utf8().map_err(|_| GeminiError::bad_request(""))?.to_string();
-        println!("\trequest path: {:?}", path);
+        self.log(&format!("\trequest path: {:?}", path));
         Ok(path)
     }
 
-    fn pre_postfix_path(&self, p: impl AsRef<Path>) -> PathBuf {
-        let content_root = self.config.content_folder();
+    fn pre_postfix_path(&self, p: impl AsRef<Path>) -> Result<PathBuf, GeminiError> {
+        let conf_lock = self.config.lock().map_err(|_| GeminiError::temporary_failure("internal server error"))?;
+        let content_root = conf_lock.content_folder();
         let path = content_root.join(normalise_path(p));
-        if path.is_dir() {
-            let default_file = self.config.index();
+        Ok(if path.is_dir() {
+            let default_file = conf_lock.index();
             path.join(default_file)
         }
         else {
             path
-        }
+        })
     }
 }

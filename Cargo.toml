@@ -11,4 +11,5 @@ openssl = { version = "0.10.40", features = ["vendored"] }
 innit = { git = "https://github.com/ambyshframber/innit", features = ["case_insensitive"] }
 percent-encoding = "2.1.0"
 mime_guess = "2.0.4"
+threadpool = "1.8.1"
 # chrono = "0.4.19"
