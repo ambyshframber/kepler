@@ -17,8 +17,8 @@ impl GeminiConfig {
     pub fn new(path: impl AsRef<Path>) -> GeminiConfig {
         let ini = read_to_string(path).unwrap();
         let document = IniDocument::from_string(ini).unwrap();
-        let port = document.get(PORT, "").map(|p| p.parse::<u16>().unwrap()).unwrap_or(DEFAULT_PORT);
-        let redirects_ttl = document.get(REDIRECTS_TTL, "").map(|p| p.parse::<u64>().unwrap()).unwrap_or(DEFAULT_REDIRECTS_TTL);
+        let port = document.get(PORT, "").map(|p| p.parse::<u16>().expect("port # failed to parse as int!")).unwrap_or(DEFAULT_PORT);
+        let redirects_ttl = document.get(REDIRECTS_TTL, "").map(|p| p.parse::<u64>().expect("redirects TTL failed to parse as int!")).unwrap_or(DEFAULT_REDIRECTS_TTL);
         let redirects_last_update = RefCell::new(Instant::now());
         let redirects_table = RefCell::new(IniDocument::empty());
 
@@ -73,7 +73,7 @@ impl GeminiConfig {
             return None
         };
         
-        let last_update = self.redirects_last_update.borrow(); // should never be mutably borrowed
+        let last_update = self.redirects_last_update.borrow().clone(); // should never be mutably borrowed
         if last_update.elapsed().as_secs() > self.redirects_ttl {
             self.update_redirects(redir_file_path);
             self.redirects_last_update.replace(Instant::now());
