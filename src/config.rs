@@ -73,7 +73,7 @@ impl GeminiConfig {
             return None
         };
         
-        let last_update = self.redirects_last_update.borrow().clone(); // should never be mutably borrowed
+        let last_update = self.redirects_last_update.borrow().clone(); // clone so that it's not still borrowed when you update the time
         if last_update.elapsed().as_secs() > self.redirects_ttl {
             self.update_redirects(redir_file_path);
             self.redirects_last_update.replace(Instant::now());
@@ -82,7 +82,7 @@ impl GeminiConfig {
         let table = self.redirects_table.borrow();
         let path = path.as_ref().to_str()?;
         let dest = table.get_case_insensitive(REDIRECT_DESTINATION, path);
-        let permanent = table.get(REDIRECT_IS_PERMANENT, path).map(|s| s.parse::<bool>().unwrap_or(false)).unwrap_or(true);
+        let permanent = table.get(REDIRECT_IS_PERMANENT, path).map(|s| s == "true").unwrap_or(false);
         dest.map(move |d| (d.to_string(), permanent))
     }
 }
