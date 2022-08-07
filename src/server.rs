@@ -63,24 +63,46 @@ impl Server {
         self.threads.execute(move || {
             let worker = Worker::new(c_config, id);
             let response = worker.process_request(request);
-            let _ = match response {
-                Ok((mime, data)) => {
-                    let header = format!("20 {}\r\n", mime);
-                    let _ = stream.write(header.as_bytes());
-                    stream.write(&data)
+            let write_result = worker.write_to_stream(stream, response);
+            match write_result {
+                Ok(len) => {
+                    worker.log(&format!("\t{} bytes written to stream", len))
                 }
-                Err(e) => stream.write(e.to_string().as_bytes())
-            };
-            let _ = stream.flush();
+                Err(e) => {
+                    worker.log(&format!("\twrite error: {:?}", e))
+                }
+            }
         });
     }
 }
+
 
 struct Worker {
     config: Arc<Mutex<GeminiConfig>>,
     id: u8
 }
 impl Worker {
+    fn write_to_stream(&self, mut stream: impl Write, data: Result<(String, Vec<u8>), GeminiError>) -> Result<usize, std::io::Error> {
+        let mut written = 0;
+        match data {
+            Err(e) => {
+                written += stream.write(e.to_string().as_bytes())?;
+                stream.flush()?
+            }
+            Ok((mime, data)) => {
+                written += stream.write(b"20 ")?;
+                written += stream.write(mime.as_bytes())?;
+                written += stream.write(b"\r\n")?;
+                stream.flush()?;
+                for block in data.chunks(1024) {
+                    written += stream.write(block)?;
+                    stream.flush()?;
+                }
+            }
+        }
+    
+        Ok(written)
+    }
     pub fn new(config: Arc<Mutex<GeminiConfig>>, id: u8) -> Worker {
         Worker {
             config, id
@@ -108,6 +130,7 @@ impl Worker {
         }
         let mime_type = from_path(&path).first_or_octet_stream().to_string();
         let data = read(path).map_err(|_| GeminiError::temporary_failure("internal server error"))?;
+        self.log(&format!("\t{} bytes read from disk", data.len()));
         Ok((mime_type, data))
     }
     // checks the url for validity and safety etc, then returns the path
